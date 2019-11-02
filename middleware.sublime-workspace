@@ -1,0 +1,727 @@
+{
+	"auto_complete":
+	{
+		"selected_items":
+		[
+			[
+				"get_signal_",
+				"get_signal_host_from_name"
+			],
+			[
+				"get",
+				"get_signal_host"
+			],
+			[
+				"get_signalH",
+				"get_signal_host_from_name"
+			],
+			[
+				"get_",
+				"get_names_from_host"
+			],
+			[
+				"get_na",
+				"get_signal_from_name"
+			],
+			[
+				"reverse",
+				"reverse_if_necessary"
+			],
+			[
+				"consum",
+				"consume_input"
+			],
+			[
+				"parent",
+				"parent_queue"
+			],
+			[
+				"output",
+				"output_buffer"
+			],
+			[
+				"received",
+				"received_from_all"
+			],
+			[
+				"get_message",
+				"get_message_values"
+			],
+			[
+				"input",
+				"input_buffer"
+			],
+			[
+				"rece",
+				"received_from_all"
+			],
+			[
+				"host",
+				"hostregistry"
+			],
+			[
+				"Com",
+				"ComponentState"
+			],
+			[
+				"of",
+				"of_codon"
+			],
+			[
+				"recipe",
+				"recipesFetched"
+			],
+			[
+				"newREc",
+				"NewRecipeQuery\t*model.RecipeQuery ƒ"
+			],
+			[
+				"recipeName",
+				"recipeBlockName"
+			],
+			[
+				"recipe-block-",
+				"recipe-block-description-inactive"
+			],
+			[
+				"recipe-block",
+				"recipe-block-description"
+			],
+			[
+				"u",
+				"uppercase"
+			],
+			[
+				"set",
+				"setRecipeToInput"
+			],
+			[
+				"from",
+				"fromIntegral"
+			],
+			[
+				"s",
+				"Sequence"
+			]
+		]
+	},
+	"buffers":
+	[
+		{
+			"file": "mix.exs",
+			"settings":
+			{
+				"buffer_size": 601,
+				"encoding": "UTF-8",
+				"line_ending": "Unix"
+			}
+		},
+		{
+			"file": "lib/rp_middleware.ex",
+			"settings":
+			{
+				"buffer_size": 637,
+				"encoding": "UTF-8",
+				"line_ending": "Unix"
+			}
+		},
+		{
+			"file": "lib/middleware/connector.ex",
+			"settings":
+			{
+				"buffer_size": 4363,
+				"encoding": "UTF-8",
+				"line_ending": "Windows"
+			}
+		},
+		{
+			"file": "lib/middleware/deployer.ex",
+			"settings":
+			{
+				"buffer_size": 800,
+				"encoding": "UTF-8",
+				"line_ending": "Windows"
+			}
+		},
+		{
+			"file": "lib/middleware/evaluator.ex",
+			"settings":
+			{
+				"buffer_size": 725,
+				"encoding": "UTF-8",
+				"line_ending": "Windows"
+			}
+		},
+		{
+			"contents": "defmodule ReactiveMiddleware.Registry do\n  @doc \"\"\"\n  The Registry is responsible for \n  * keeping track of signals by their names,\n  * holding the consistency guarantee that is in use, and\n  * synchronizing signals and guarantee with other registries\n    in order to create a globally consistent view of both.\n  \"\"\"\n  use GenServer\n  require Logger\n\n  ####################\n  # CLIENT INTERFACE #\n  ####################\n\n  @doc \"\"\"\n  Start the registry\n  \"\"\"\n  def start_link(args \\\\ []) do\n    GenServer.start_link(__MODULE__, args, name: __MODULE__)\n  end\n\n  @doc \"\"\"\n  Adds a signal to the registry under the given name.\n  \"\"\"\n  def add_signal(signal, name) do\n    GenServer.call(__MODULE__, {:insert, signal, name})\n  end\n\n  @doc \"\"\"\n  Removes the signal with the given name if it exists and is locally hosted.\n  \"\"\"\n  def remove_signal(name) do\n    GenServer.call(__MODULE__, {:remove, name})\n  end\n\n  @doc \"\"\"\n  Removes all signals hosted at the given host from the registry.\n  \"\"\"\n  def remove_signals_of(host) do\n    GenServer.call(__MODULE__, {:remove_all, host})\n  end\n\n  @doc \"\"\"\n  Gets a signal by its name.\n  \"\"\"\n  def get_signal(name) do\n    GenServer.call(__MODULE__, {:get, name})\n  end\n\n  @doc \"\"\"\n  Gets the names of all available signals.\n  \"\"\"\n  def get_signals() do\n    GenServer.call(__MODULE__, {:get_all})\n  end\n\n  @doc \"\"\"\n  Gets the node where the signal with the given name is hosted.\n  \"\"\"\n  def get_signal_host(name) do\n    GenServer.call(__MODULE__, {:get_signal_host, name})\n  end\n\n  @doc \"\"\"\n  Gets the consistency guarantee that is in use\n  \"\"\"\n  def get_guarantee() do\n    GenServer.call(__MODULE__, {:get_guarantee})\n  end\n\n  @doc \"\"\"\n  Sets the consistency guarantee to use.\n  \"\"\"\n  def set_guarantee(guarantee) do\n    GenServer.call(__MODULE__, {:set_guarantee, guarantee})\n  end\n\n  @doc \"\"\"\n  Synchronize with all connected nodes.\n  \"\"\"\n  def update() do\n    GenServer.cast(__MODULE__, {:update})\n  end\n\n  @doc \"\"\"\n  Synchronize with the given node.\n  \"\"\"\n  def synchronize(node_name) do\n    GenServer.cast(__MODULE__, {:synchronize, node_name})\n  end\n\n  ####################\n  # SERVER CALLBACKS #\n  ####################\n\n  def init(_args) do\n    Logger.info(\"Starting the Registry\")\n    stable = :ets.new(:signals, [:named_table, :set, :protected])\n    htable = :ets.new(:signal_names, [:named_table, :set, :protected])\n    update()\n    {:ok, %{stable: stable, htable: htable, guarantee: nil}}\n  end\n\n  def handle_call({:insert, signal, name}, _from, state) do\n    host = Node.self\n    add_signal(signal, name, host, state)\n    publish_new_signal(name, signal, state)\n    {:reply, :ok, state}\n  end\n\n  def handle_call({:remove, name}, _from, state) do\n    host = Node.self\n    case get_signal_host_from_name(name, state) do\n      ^host -> \n        remove_signal(name, host, state)\n        publish_signal_removed(name, state)\n        {:reply, :ok, state}\n      nil -> {:reply, {:error, \"not found\"}, state}\n      _remote -> {:reply, {:error, \"Cannot remove remote signal locally.\"}, state}\n    end\n  end\n\n  def handle_call({:remove_all, host}, _from, %{stable: st, htable: ht} = state) do\n    get_names_from_host(host, state)\n    |> Enum.map(fn name -> :ets.delete(st, name) end)\n    :ets.delete(ht, host)\n    {:reply, :ok, state}\n  end\n\n  def handle_call({:get, name}, _from, state) do\n    case get_signal_from_name(name, state) do\n      nil -> {:reply, {:error, \"not found\"}, state}\n      sig -> {:reply, {:ok, sig}, state}\n    end\n  end\n\n  def handle_call({:get_all}, _from, %{stable: st} = state) do\n    signal_tuples = :ets.tab2list(st)\n    {:reply, {:ok, signal_tuples}, state}\n  end\n\n  def handle_call({:get_signal_host, name}, _from, state) do\n    case get_signal_host_from_name(name, state) do\n      nil -> {:reply, {:error, \"not found\"}, state}\n      host -> {:reply, {:ok, host}, state}\n    end\n  end\n\n  def handle_call({:get_guarantee}, _from, %{guarantee: guarantee} = state) do\n    {:reply, guarantee, state}\n  end\n\n  def handle_call({:set_guarantee, guarantee}, _from, state) do\n    new_state = %{state | guarantee: guarantee}\n    publish_new_guarantee(new_state)\n    {:reply, :ok, new_state}\n  end\n\n  def handle_call(m, from, state) do\n    Logger.debug(\"Call: #{inspect(m)} from #{inspect(from)}.\")\n    {:reply, :ok, state}\n  end\n\n  def handle_cast({:new_signal, signal, name, host}, state) do\n    Logger.info(\"New signal #{inspect name} available at host: #{inspect host}.\")\n    add_signal(signal, name, host, state)\n    {:noreply, state}\n  end\n\n  def handle_cast({:signal_removed, name, host}, state) do\n    Logger.info(\"Signal #{inspect name} removed from host: #{inspect host}.\")\n    remove_signal(name, host, state)\n    {:noreply, state}\n  end\n\n  def handle_cast({:new_guarantee, guarantee}, state) do\n    Logger.info(\"Guarantee set to #{inspect guarantee}.\")\n    new_state = %{state | guarantee: guarantee}\n    {:noreply, new_state}\n  end\n\n  #in case the registry crashes\n  def handle_cast({:update}, state) do\n    Node.list\n    |> Enum.map(fn n -> synchronize(n) end)\n    {:noreply, state}\n  end\n\n  def handle_cast({:synchronize, node_name}, state) do\n    GenServer.cast(__MODULE__, {:send_signals, node_name})\n    rem_reg = :global.whereis_name({node_name, :registry})\n    GenServer.cast(rem_reg, {:send_signals, Node.self})\n    {:noreply, state}\n  end\n\n  def handle_cast({:send_signals, node_name}, state) do\n    Logger.debug(\"Synchronizing with registry of node #{inspect(node_name)}.\")\n    rem_reg = :global.whereis_name({node_name, :registry})\n    Logger.debug(\"The registry of the new node: #{inspect rem_reg}.\")\n    # send a copy of all locally registered signals to the registry of the new node\n    signals = \n      get_names_from_host(Node.self, state)\n      |> Enum.map(fn name -> {name, get_signal_from_name(name, state)} end)\n    GenServer.cast(rem_reg, {:update_signals, signals, Node.self})\n    {:noreply, state}\n  end\n\n  def handle_cast({:update_signals, signals_by_name, host}, %{stable: st, htable: ht} = state) do\n    names = \n      signals_by_name\n      |> Enum.map(fn {name, _signal} -> name end)\n    to_be_removed = get_names_from_host(host, state) -- names\n    :ets.insert(ht, {host, names})\n    signals_by_name\n    |> Enum.map(fn {name, signal} -> :ets.insert(st, {name, {host, signal}}) end)\n    to_be_removed\n    |> Enum.map(fn name -> :ets.delete(st, name) end)\n    {:noreply, state}\n  end\n\n  def handle_cast(m, state) do\n    Logger.debug(\"Cast: #{inspect(m)}\")\n    {:noreply, state}\n  end\n\n  def handle_info(m, state) do\n    Logger.debug(\"Info: #{inspect(m)}.\")\n    {:noreply, state}\n  end\n\n  ############################\n  # IMPLEMENTATION / HELPERS #\n  ############################\n\n  defp publish_new_signal(name, signal, %{}) do\n    Node.list\n    |> Enum.map(fn n -> :global.whereis_name({n, :registry}) end)\n    |> Enum.map(fn r -> GenServer.cast(r, {:new_signal, signal, name, Node.self}) end)\n  end\n\n  defp publish_signal_removed(name, %{}) do\n    Node.list\n    |> Enum.map(fn n -> :global.whereis_name({n, :registry}) end)\n    |> Enum.map(fn r -> GenServer.cast(r, {:signal_removed, name, Node.self}) end)\n  end\n\n  defp publish_new_guarantee(%{guarantee: guarantee}) do\n    Node.list\n    |> Enum.map(fn n -> :global.whereis_name({n, :registry}) end)\n    |> Enum.map(fn r -> GenServer.cast(r, {:new_guarantee, guarantee}) end)\n  end\n\n  defp add_signal(signal, name, host, %{stable: st, htable: ht} = state) do\n    :ets.insert(st, {name, {host, signal}})\n    :ets.insert(ht, {host, [name | get_names_from_host(host, state)]})\n  end\n\n  defp remove_signal(name, host, %{stable: st, htable: ht} = state) do\n    :ets.delete(st, name)\n    :ets.insert(ht, {host, get_names_from_host(host, state) -- [name]})\n  end\n\n  defp get_names_from_host(host, %{htable: ht}) do\n    case :ets.lookup(ht, host) do\n      [{^host, names}] -> names\n      [] -> []\n    end\n  end\n\n  defp get_signal_from_name(name, %{stable: st}) do\n    case :ets.lookup(st, name) do\n      [{^name, {_host, signal}}] -> signal\n      [] -> nil\n    end\n  end\n\n  defp get_signal_host_from_name(name, %{stable: st}) do\n    case :ets.lookup(st, name) do\n      [{^name, {host, _signal}}] -> host\n      [] -> nil\n    end\n  end\nend",
+			"file": "lib/middleware/registry.ex",
+			"file_size": 8144,
+			"file_write_time": 132170929019732030,
+			"settings":
+			{
+				"buffer_size": 8176,
+				"encoding": "UTF-8",
+				"line_ending": "Unix"
+			}
+		}
+	],
+	"build_system": "",
+	"build_system_choices":
+	[
+	],
+	"build_varint": "",
+	"command_palette":
+	{
+		"height": 311.0,
+		"last_filter": "",
+		"selected_items":
+		[
+			[
+				"Package Control: ",
+				"Package Control: Install Package"
+			],
+			[
+				"Package Control: in",
+				"Package Control: Install Package"
+			],
+			[
+				"Package Control: Install",
+				"Package Control: Install Package"
+			],
+			[
+				"Package Control: i",
+				"Package Control: Install Package"
+			],
+			[
+				"install",
+				"Package Control: Install Package"
+			],
+			[
+				"disable",
+				"Package Control: Disable Package"
+			],
+			[
+				"Package Control: enable",
+				"Package Control: Enable Package"
+			],
+			[
+				"Package Control: install",
+				"Package Control: Install Package"
+			],
+			[
+				"Package Control: disable",
+				"Package Control: Disable Package"
+			]
+		],
+		"width": 432.0
+	},
+	"console":
+	{
+		"height": 392.0,
+		"history":
+		[
+			"go run helloworld.go",
+			"cd D:",
+			"GoSublime",
+			"go run helloworld.go",
+			"C:",
+			"C",
+			"C:/",
+			"[C:/Go/src/testGo/ ]#",
+			"SublimeHaskell: ghc-mod",
+			"SublimeHaskell Repl: GHCi",
+			"SublimeHaskell REPL: GHCi",
+			"SublimeHaskell Repl: GHCi",
+			"import urllib.request,os,hashlib; h = 'df21e130d211cfc94d9b0905775a7c0f' + '1e3d39e33b79698005270310898eea76'; pf = 'Package Control.sublime-package'; ipp = sublime.installed_packages_path(); urllib.request.install_opener( urllib.request.build_opener( urllib.request.ProxyHandler()) ); by = urllib.request.urlopen( 'http://packagecontrol.io/' + pf.replace(' ', '%20')).read(); dh = hashlib.sha256(by).hexdigest(); print('Error validating download (got %s instead of %s), please try manual install' % (dh, h)) if dh != h else open(os.path.join( ipp, pf), 'wb' ).write(by)"
+		]
+	},
+	"distraction_free":
+	{
+		"menu_visible": true,
+		"show_minimap": false,
+		"show_open_files": false,
+		"show_tabs": false,
+		"side_bar_visible": false,
+		"status_bar_visible": false
+	},
+	"expanded_folders":
+	[
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/Middleware/rp_middleware",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/Middleware/rp_middleware/lib",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/Middleware/rp_middleware/lib/middleware"
+	],
+	"file_history":
+	[
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/registry/registry.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/dsl/event_stream.ex",
+		"/C/Users/Dries/Documents/BiglyBT Downloads/ElcomSoft Advanced Archive Password Recovery Enterprise v4.54.110 + Crack {B4tman}/Install Notes.txt",
+		"/C/Users/Dries/Documents/BiglyBT Downloads/ARCHPRo 4.53/readme.txt",
+		"/C/Users/Dries/Documents/BiglyBT Downloads/ARCHPRo 4.53/Serial/Serial.txt",
+		"/C/Apache24/htdocs/cacti/README.md",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/Deliverables/evaluation/2_bquarp_quarp_comparison/bquarp_livelocking.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/dsl/signal.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/Deliverables/evaluation/2_bquarp_quarp_comparison/evaluation_example.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/examples/use_case_bquarp.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/Deliverables/evaluation/1_reactive_application_development/bquarp+/bquarp+_implementation.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/quality/context.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/network/evaluator.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactive_middleware.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/config/config.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/network/connector.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/dsl/signal_obs.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/mix.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/examples/evaluation_example.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/dsl/signal_obs_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/deps/observables_extended/lib/observables/distinct.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/examples/bquarp_example.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/processing/matching_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/quality/context_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/quality/guarantee_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/dsl/behaviour_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/dsl/event_stream_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/dsl/signal_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/processing/matching.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/quality/guarantee.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/processing/combine_with_guarantees.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/processing/combine_var_with_guarantees.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/deployer.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/README.md",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/dsl/behaviour.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/examples/use_case_observables.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/examples/use_case_observables_.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/monitor/evaluator.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/deployment.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/monitor/connector.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/.iex.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/deps/observables_extended/lib/behavior/gen_observable.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/dsl/blabla.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/bquarp/context_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/bquarp/combine_with_guarantees.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/bquarp/matching.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/bquarp/context.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/bquarp/registry.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/bquarp/combine_var_with_guarantees.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/bquarp/signal_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/bquarp/signal_obs.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/bquarp/signal.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/reactivity/combine_var_with_guarantees.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/bquarp/guarantee.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/quarp/quarp.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/bquarp/combine_var_with_guarantees.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/lib/bquarp/combine_var_with_guarantees",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/quality/bquarp/signal_obs_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/quality/bquarp/signal_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/quality/bquarp/context_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/quality/bquarp/guarantee_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/BQuarp/bquarp-reactivity/test/quality/bquarp/matching_test.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/New middleware/reactive-middleware/lib/reactivity/quality/guarantee.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/New middleware/reactive-middleware/lib/reactivity/signal/input_buffer.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_language/dsl.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/quarp_logic/quality.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/Reactivity/reactivitytest/lib/reactivity/dsl/reactivity.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/Reactivity/reactivitytest/lib/reactivity/mix.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/Reactivity/reactivitytest/lib/reactivity/README.md",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/Reactivity/reactivitytest/lib/reactivity/reactive_app.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/Reactivity/reactivitytest/deps/reactivity/mix.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/Reactivity/reactivitytest/mix.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_language/signal.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_language/generator.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_language/interpreter.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_language/program.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_application/pizza_factory.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_application/example.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_middleware/component.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_middleware/buffer.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_middleware/component_state.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_middleware/quality.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/tests/boebeltje.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/tests/bab.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/tests/boebeltje.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/tests/bab.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_language/source.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/quarp_middleware.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_middleware/source_component.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_middleware/message.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/test/reactive_middleware/quality.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/.formatter.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/lib/reactive_program/defmodule.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/mix.exs",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/QUARP middleware/quarp_middleware/test/quarp_middleware_test.exs",
+		"/D/Projecten/Programmeren/Elixir/listrecursion.ex",
+		"/C/Users/Dries/Exercism/elixir/accumulate/accumulate.exs",
+		"/C/Users/Dries/Exercism/elixir/accumulate/accumulate_test.exs",
+		"/C/Users/Dries/Exercism/elixir/word-count/word_count.exs",
+		"/C/Users/Dries/Exercism/elixir/word-count/word_count_test.exs",
+		"/C/Users/Dries/Exercism/elixir/space-age/space_age.exs",
+		"/C/Users/Dries/Exercism/elixir/space-age/space_age_test.exs",
+		"/C/Users/Dries/Exercism/elixir/protein-translation/protein_translation.exs",
+		"/C/Users/Dries/Exercism/elixir/protein-translation/protein_translation_test.exs",
+		"/C/Users/Dries/Exercism/elixir/rotational-cipher/rotational_cipher.exs",
+		"/C/Users/Dries/Exercism/elixir/rotational-cipher/rotational_cipher_test.exs",
+		"/C/Users/Dries/Exercism/elixir/nucleotide-count/nucleotide_count.exs",
+		"/C/Users/Dries/Exercism/elixir/nucleotide-count/nucleotide_count_test.exs",
+		"/D/Projecten/Programmeren/Elixir/fizzbuzz.ex",
+		"/D/Projecten/Programmeren/Elixir/fizzbuzz.exs",
+		"/D/Projecten/Programmeren/Elixir/prefix.exs",
+		"/D/Projecten/Programmeren/Elixir/modulesexercise.ex",
+		"/C/Users/Dries/Exercism/elixir/bob/bob_test.exs",
+		"/C/Users/Dries/Exercism/elixir/bob/bob.exs",
+		"/C/Users/Dries/Exercism/elixir/hello-world/hello_world_test.exs",
+		"/C/Users/Dries/Exercism/elixir/hello-world/hello_world.exs",
+		"/D/Projecten/Programmeren/Elixir/numberguess.ex",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/ReactiveSpiders-master/src/SID-UP/DependencyChangePulse.ts",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/ReactiveSpiders-master/src/Signal.ts",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/ReactiveSpiders-master/src/ReactiveMirror.ts",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/ReactiveSpiders-master/src/ReactiveSTDLib.ts",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Beide semesters/Masterthesis/5. Implementatie/ReactiveSpiders-master/src/SID-UP/DependencyChangePulse.js.map",
+		"/C/Users/Dries/go/src/sco/qfmt/websrc/js/app.js",
+		"/C/Users/Dries/AppData/Roaming/Sublime Text 3/Packages/TypeScript/TypeScript.sublime-settings",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Semester 1/Geavanceerde Methodes voor de Software Architectuur/Part 2 - Security and Privacy by Design/proverif2.00/exercises/warmup1.pv",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Semester 1/Geavanceerde Methodes voor de Software Architectuur/Part 2 - Security and Privacy by Design/proverif2.00/exercises/warmup3.pv",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Semester 1/Geavanceerde Methodes voor de Software Architectuur/Part 2 - Security and Privacy by Design/proverif2.00/exercises/warmup2.pv",
+		"/D/Documenten/School/KU Leuven/Master Ingenieurswetenschappen/2de Master/Semester 1/Geavanceerde Methodes voor de Software Architectuur/Part 2 - Security and Privacy by Design/proverif2.00/exercises/deltaIoT.pv"
+	],
+	"find":
+	{
+		"height": 39.0
+	},
+	"find_in_files":
+	{
+		"height": 104.0,
+		"where_history":
+		[
+		]
+	},
+	"find_state":
+	{
+		"case_sensitive": false,
+		"find_history":
+		[
+			"port"
+		],
+		"highlight": true,
+		"in_selection": false,
+		"preserve_case": false,
+		"regex": false,
+		"replace_history":
+		[
+		],
+		"reverse": false,
+		"show_context": true,
+		"use_buffer2": true,
+		"whole_word": false,
+		"wrap": true
+	},
+	"groups":
+	[
+		{
+			"selected": 5,
+			"sheets":
+			[
+				{
+					"buffer": 0,
+					"file": "mix.exs",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 601,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								450,
+								450
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/Elixir/Syntaxes/Elixir.tmLanguage",
+							"tab_size": 2,
+							"translate_tabs_to_spaces": true
+						},
+						"translation.x": 0.0,
+						"translation.y": 0.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 5,
+					"type": "text"
+				},
+				{
+					"buffer": 1,
+					"file": "lib/rp_middleware.ex",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 637,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								402,
+								402
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/Elixir/Syntaxes/Elixir.tmLanguage",
+							"tab_size": 2,
+							"translate_tabs_to_spaces": true
+						},
+						"translation.x": 0.0,
+						"translation.y": 0.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 4,
+					"type": "text"
+				},
+				{
+					"buffer": 2,
+					"file": "lib/middleware/connector.ex",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 4363,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								2679,
+								2642
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/Elixir/Syntaxes/Elixir.tmLanguage",
+							"translate_tabs_to_spaces": false
+						},
+						"translation.x": 0.0,
+						"translation.y": 1404.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 3,
+					"type": "text"
+				},
+				{
+					"buffer": 3,
+					"file": "lib/middleware/deployer.ex",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 800,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								572,
+								572
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/Elixir/Syntaxes/Elixir.tmLanguage"
+						},
+						"translation.x": 0.0,
+						"translation.y": 0.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 2,
+					"type": "text"
+				},
+				{
+					"buffer": 4,
+					"file": "lib/middleware/evaluator.ex",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 725,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								588,
+								588
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/Elixir/Syntaxes/Elixir.tmLanguage",
+							"tab_size": 2,
+							"translate_tabs_to_spaces": true
+						},
+						"translation.x": 0.0,
+						"translation.y": 0.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 1,
+					"type": "text"
+				},
+				{
+					"buffer": 5,
+					"file": "lib/middleware/registry.ex",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 8176,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								452,
+								452
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/Elixir/Syntaxes/Elixir.tmLanguage",
+							"tab_size": 2,
+							"translate_tabs_to_spaces": true
+						},
+						"translation.x": 0.0,
+						"translation.y": 0.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 0,
+					"type": "text"
+				}
+			]
+		}
+	],
+	"incremental_find":
+	{
+		"height": 27.0
+	},
+	"input":
+	{
+		"height": 40.0
+	},
+	"layout":
+	{
+		"cells":
+		[
+			[
+				0,
+				0,
+				1,
+				1
+			]
+		],
+		"cols":
+		[
+			0.0,
+			1.0
+		],
+		"rows":
+		[
+			0.0,
+			1.0
+		]
+	},
+	"menu_visible": true,
+	"output.9o://C:\\Go\\src\\recepten\\qfmt":
+	{
+		"height": 313.0
+	},
+	"output.9o://C:\\Go\\src\\recepten\\qfmt\\websrc\\js":
+	{
+		"height": 124.0
+	},
+	"output.9o://C:\\Go\\src\\recepten\\qfmt\\websrc\\js\\qfmt":
+	{
+		"height": 124.0
+	},
+	"output.9o://C:\\Go\\src\\testGo":
+	{
+		"height": 271.0
+	},
+	"output.9o://C:\\Users\\Dries\\AppData\\Roaming\\Sublime Text 3\\Packages\\GoSublime":
+	{
+		"height": 247.0
+	},
+	"output.9o://D:\\Documenten\\School\\KU Leuven\\Master Ingenieurswetenschappen\\2de Master\\Beide semesters\\Masterthesis\\5. Implementatie\\QUARP middleware\\quarp_middleware\\lib\\reactivity\\dsl":
+	{
+		"height": 132.0
+	},
+	"output.GoSublime-main-output":
+	{
+		"height": 124.0
+	},
+	"output.doc":
+	{
+		"height": 0.0
+	},
+	"output.exec":
+	{
+		"height": 138.0
+	},
+	"output.find_results":
+	{
+		"height": 0.0
+	},
+	"output.sublime_haskell_error_panel":
+	{
+		"height": 118.0
+	},
+	"output.sublime_haskell_output_panel":
+	{
+		"height": 179.0
+	},
+	"pinned_build_system": "Packages/Haskell/Haskell.sublime-build",
+	"project": "middleware.sublime-project",
+	"replace":
+	{
+		"height": 50.0
+	},
+	"save_all_on_build": true,
+	"select_file":
+	{
+		"height": 0.0,
+		"last_filter": "",
+		"selected_items":
+		[
+		],
+		"width": 0.0
+	},
+	"select_project":
+	{
+		"height": 500.0,
+		"last_filter": "",
+		"selected_items":
+		[
+		],
+		"width": 380.0
+	},
+	"select_symbol":
+	{
+		"height": 0.0,
+		"last_filter": "",
+		"selected_items":
+		[
+		],
+		"width": 0.0
+	},
+	"selected_group": 0,
+	"settings":
+	{
+	},
+	"show_minimap": false,
+	"show_open_files": true,
+	"show_tabs": true,
+	"side_bar_visible": true,
+	"side_bar_width": 221.0,
+	"status_bar_visible": true,
+	"template_settings":
+	{
+	}
+}
