@@ -1,6 +1,12 @@
-# RpMiddleware
+# Reactive Programming Middleware
 
-**TODO: Add description**
+Simple middleware for usage with reactive programming libraries. 
+Features: 
+* Network monitoring, e.g. automatic device discovery (Connector)
+* Global signal library (Registry)
+* Remote reactive program deployment (Deployer, Evaluator)
+
+Built for academic purposes.
 
 ## Installation
 
