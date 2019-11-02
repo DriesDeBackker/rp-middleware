@@ -17,12 +17,6 @@ defmodule ReactiveMiddleware.Connector do
   		GenServer.start_link(__MODULE__, [], name: __MODULE__)
 	end
 
-	# Connect manually with a given set of nodes 
-	# (when udp multicast is disfunctional on your machine).
-	def manual_connect(ns) do
-		GenServer.call(__MODULE__, {:connect_all, ns})
-	end
-
 	####################
 	# SERVER CALLBACKS #
 	####################
@@ -87,15 +81,6 @@ defmodule ReactiveMiddleware.Connector do
 		handle_disconnect(remote)
 		{:noreply, s}
 	end
-
-	@doc """
-	This message is received when a manual connect to a list of nodes is performed.
-	"""
-	def handle_call({:connect_all, ns}, _from, s) do
-		Enum.each(ns, fn n -> handle_connect(n) end)
-		{:reply, :ok, s}
-	end
-
 
 	############################
 	# IMPLEMENTATION / HELPERS #
