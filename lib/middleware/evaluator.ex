@@ -18,7 +18,7 @@ defmodule ReactiveMiddleware.Evaluator do
   Evaluates a (remotely) sent program locally.
   """
   def evaluate(program) do
-    GenServer.cast(__MODULE__, {:deploy_program, program})
+    GenServer.cast(__MODULE__, {:evaluate, program})
   end
 
   ####################
@@ -30,8 +30,8 @@ defmodule ReactiveMiddleware.Evaluator do
     {:ok, %{}}
   end
 
-  def handle_call({:evaluate, program}, _from, state) do
+  def handle_cast({:evaluate, program}, state) do
     program.()
-    {:reply, :ok, state}
+    {:noreply, state}
   end
 end
