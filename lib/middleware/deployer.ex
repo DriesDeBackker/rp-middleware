@@ -18,7 +18,7 @@ defmodule ReactiveMiddleware.Deployer do
   Deploys the given program to the remote node.
   """
 	def deploy(remote, program) do
-		GenServer.call(__MODULE__,{:deploy, program, remote})
+		GenServer.cast(__MODULE__,{:deploy, program, remote})
 	end
   
 	####################
@@ -32,7 +32,7 @@ defmodule ReactiveMiddleware.Deployer do
 
  	def handle_call({:deploy, program, remote}, _from, state) do
     evaluator = :global.whereis_name({remote, :evaluator})
-		GenServer.call(evaluator, {:evaluate, program})
+		GenServer.cast(evaluator, {:evaluate, program})
     {:reply, :ok, state}
   end
 end
